@@ -7,7 +7,6 @@ class TransactionCreate(BaseModel):
     transaction_type: str
     category: str
     description: str | None = None
-    user_id: int
 
 
 class TransactionResponse(BaseModel):
@@ -21,3 +20,9 @@ class TransactionResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+class TransactionUpdate(BaseModel):
+    amount: float | None = None
+    transaction_type: str | None = None
+    category: str | None = None
+    description: str | None = None
