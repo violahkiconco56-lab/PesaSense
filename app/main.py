@@ -6,6 +6,7 @@ from app.models.budget import Budget
 from app.routers import transactions
 from app.routers import users
 from app.routers import budget
+from app.routers import reports
 
 
 app = FastAPI(
@@ -18,6 +19,7 @@ Base.metadata.create_all(bind=engine)
 app.include_router(transactions.router)
 app.include_router(users.router)
 app.include_router(budget.router)
+app.include_router(reports.router)
 
 
 @app.get("/")
