@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 CURRENT_YEAR = datetime.now().year
@@ -35,6 +35,8 @@ class BudgetUpdate(BaseModel):
 
 
 class BudgetResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: int
     category: str
     limit_amount: float
@@ -42,5 +44,3 @@ class BudgetResponse(BaseModel):
     year: int
     user_id: int
 
-    class Config:
-        from_attributes = True

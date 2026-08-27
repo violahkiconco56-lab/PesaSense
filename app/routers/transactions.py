@@ -12,8 +12,9 @@ from app.schemas.transaction import (
     TransactionResponse,
     TransactionUpdate,
 )
+from app.schemas.ai import FinanceQuestion
 from app.services.auth import get_current_user
-from app.services.ai import generate_financial_summary
+from app.services.ai import answer_finance_question, generate_financial_summary
 
 router = APIRouter(
     prefix="/transactions",
@@ -150,6 +151,32 @@ def get_ai_summary(
     summary = generate_financial_summary(transactions, total_income, total_expenses)
 
     return {"summary": summary}
+
+
+@router.post("/insights/question")
+def ask_financial_assistant(
+    question_data: FinanceQuestion,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    transactions = (
+        db.query(Transaction)
+        .filter(Transaction.user_id == current_user.id)
+        .order_by(Transaction.date.asc(), Transaction.id.asc())
+        .all()
+    )
+
+    total_income = sum(t.amount for t in transactions if t.transaction_type == "income")
+    total_expenses = sum(t.amount for t in transactions if t.transaction_type == "expense")
+
+    answer = answer_finance_question(
+        question_data.question,
+        transactions,
+        total_income,
+        total_expenses
+    )
+
+    return {"answer": answer}
 
 
 @router.get("/{transaction_id}", response_model=TransactionResponse)

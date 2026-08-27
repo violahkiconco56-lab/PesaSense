@@ -1,4 +1,5 @@
 from fastapi import FastAPI
+from app.config import settings
 from app.database import engine, Base
 from app.models.user import User
 from app.models.transaction import Transaction
@@ -15,7 +16,8 @@ app = FastAPI(
 )
 
 
-Base.metadata.create_all(bind=engine)
+if settings.AUTO_CREATE_TABLES:
+    Base.metadata.create_all(bind=engine)
 app.include_router(transactions.router)
 app.include_router(users.router)
 app.include_router(budget.router)

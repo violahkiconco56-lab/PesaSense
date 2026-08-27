@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 TransactionType = Literal["income", "expense"]
@@ -38,6 +38,8 @@ class TransactionCreate(BaseModel):
 
 
 class TransactionResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: int
     amount: float
     transaction_type: str
@@ -45,9 +47,6 @@ class TransactionResponse(BaseModel):
     description: str | None
     date: datetime
     user_id: int
-
-    class Config:
-        from_attributes = True
 
 
 class TransactionUpdate(BaseModel):
