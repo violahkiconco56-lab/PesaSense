@@ -14,4 +14,4 @@ __pycache__/
 
 # IDE files
 .vscode/
-.idea/
+.idea/.pytest_cache/

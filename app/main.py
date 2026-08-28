@@ -1,9 +1,12 @@
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
 from app.config import settings
 from app.database import engine, Base
 from app.models.user import User
 from app.models.transaction import Transaction
 from app.models.budget import Budget
+
 from app.routers import transactions
 from app.routers import users
 from app.routers import budget
@@ -13,6 +16,14 @@ from app.routers import reports
 app = FastAPI(
     title="PesaSense AI",
     version="1.0.0"
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
