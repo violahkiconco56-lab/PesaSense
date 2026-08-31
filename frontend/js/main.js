@@ -28,7 +28,7 @@ loginForm.addEventListener("submit", async function (event) {
 
             message.textContent = "Login successful!";
 
-            console.log("Login successful:", data);
+            window.location.href = "pages/dashboard.html";
         } else {
             message.textContent = data.detail || "Login failed.";
         }
