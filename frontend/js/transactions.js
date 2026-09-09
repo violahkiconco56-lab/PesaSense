@@ -135,3 +135,9 @@ transactionForm.addEventListener("submit", async function (event) {
 
 
 loadTransactions();
+const logoutButton = document.getElementById("logoutButton");
+
+logoutButton.addEventListener("click", function () {
+    localStorage.removeItem("access_token");
+    window.location.href = "../index.html";
+});

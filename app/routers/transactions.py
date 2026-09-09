@@ -147,10 +147,22 @@ def get_ai_summary(
 
     total_income = sum(t.amount for t in transactions if t.transaction_type.lower() == "income")
     total_expenses = sum(t.amount for t in transactions if t.transaction_type.lower() == "expense")
+    balance = total_income - total_expenses
+
+    category_totals = {}
+    for t in transactions:
+        if t.transaction_type.lower() == "expense":
+            category_totals[t.category] = category_totals.get(t.category, 0) + t.amount
 
     summary = generate_financial_summary(transactions, total_income, total_expenses)
 
-    return {"summary": summary}
+    return {
+        "summary": summary,
+        "total_income": total_income,
+        "total_expenses": total_expenses,
+        "balance": balance,
+        "category_breakdown": category_totals,
+    }
 
 
 @router.post("/insights/question")
