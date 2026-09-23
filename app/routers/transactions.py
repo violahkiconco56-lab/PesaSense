@@ -134,6 +134,61 @@ def get_dashboard_summary(
     }
 
 
+@router.get("/income/summary")
+def get_income_summary(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Summarise income sources, including recurring ones.
+
+    Recurring income is converted to a monthly equivalent so the dashboard and
+    the AI assistant can reason about steady earnings, not just cash logged.
+    """
+    incomes = (
+        db.query(Transaction)
+        .filter(
+            Transaction.user_id == current_user.id,
+            Transaction.transaction_type == "income",
+        )
+        .order_by(Transaction.date.desc(), Transaction.id.desc())
+        .all()
+    )
+
+    monthly_multiplier = {
+        "daily": 30,
+        "weekly": 4.33,
+        "monthly": 1,
+    }
+
+    total_income = 0.0
+    monthly_income = 0.0
+    frequency_breakdown = {}
+    source_totals = {}
+
+    for income in incomes:
+        total_income += income.amount
+
+        frequency = (income.frequency or "one_time").lower()
+        multiplier = monthly_multiplier.get(frequency, 0)
+        monthly_income += income.amount * multiplier
+
+        frequency_breakdown[frequency] = frequency_breakdown.get(frequency, 0) + income.amount
+        source_label = (income.category or "Other").title()
+        source_totals[source_label] = source_totals.get(source_label, 0) + income.amount
+
+    distinct_sources = len(source_totals)
+
+    return {
+        "total_income": total_income,
+        "monthly_income": round(monthly_income, 2),
+        "income_count": len(incomes),
+        "distinct_sources": distinct_sources,
+        "frequency_breakdown": frequency_breakdown,
+        "source_totals": source_totals,
+        "average_per_source": round(total_income / distinct_sources, 2) if distinct_sources else 0,
+    }
+
+
 @router.get("/insights/summary")
 def get_ai_summary(
     db: Session = Depends(get_db),

@@ -13,6 +13,9 @@ class Transaction(Base):
     transaction_type = Column(String)
     category = Column(String)
     description = Column(String)
+    # How often income is received: "one_time", "daily", "weekly", "monthly".
+    # Only meaningful for income records; left null for expenses.
+    frequency = Column(String, nullable=True)
     date = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     user_id = Column(Integer, ForeignKey("users.id"))

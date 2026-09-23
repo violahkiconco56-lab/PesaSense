@@ -5,6 +5,7 @@ class UserCreate(BaseModel):
     username: str = Field(min_length=3, max_length=50)
     email: EmailStr
     password: str = Field(min_length=8, max_length=128)
+    profile_picture_url: str | None = Field(default=None, max_length=500)
 
 class UserLogin(BaseModel):
     email: EmailStr
@@ -14,6 +15,7 @@ class UserLogin(BaseModel):
 class UserUpdate(BaseModel):
     username: str | None = Field(default=None, min_length=3, max_length=50)
     email: EmailStr | None = None
+    profile_picture_url: str | None = Field(default=None, max_length=500)
 
 
 class PasswordChange(BaseModel):
@@ -27,3 +29,10 @@ class UserResponse(BaseModel):
     id: int
     username: str
     email: EmailStr
+    profile_picture_url: str | None = None
+    is_verified: bool
+
+
+class UserCreateResponse(UserResponse):
+    email_verification_sent: bool
+    email_verification_message: str

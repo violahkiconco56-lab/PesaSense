@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>PesaSense-AI | Transactions</title>
+
+    <link
+        href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"
+        rel="stylesheet"
+    >
+</head>
+
+<body>
+
+    <!-- Navigation -->
+    <nav>
+        <h2>PesaSense-AI</h2>
+
+        <a href="dashboard.html">Dashboard</a>
+        <a href="transactions.html">Transactions</a>
+        <a href="budgets.html">Budgets</a>
+        <a href="reports.html">Reports</a>
+        <a href="ai.html">AI Insights</a>
+
+        <button id="logoutButton">Logout</button>
+    </nav>
+
+
+    <!-- Transactions -->
+    <main class="container mt-4">
+
+        <h1>Transactions</h1>
+
+        <p>View and manage your income and expenses.</p>
+
+
+        <!-- Add Transaction -->
+        <section class="mt-4">
+
+            <h2>Add Transaction</h2>
+
+            <form id="transactionForm">
+
+                <div>
+                    <label for="transactionType">Type</label>
+
+                    <select id="transactionType" required>
+                        <option value="expense">Expense</option>
+                        <option value="income">Income</option>
+                    </select>
+                </div>
+
+                <div>
+                    <label for="amount">Amount</label>
+
+                    <input
+                        type="number"
+                        id="amount"
+                        min="1"
+                        required
+                    >
+                </div>
+
+                <div>
+                    <label for="category">Category</label>
+
+                    <input
+                        type="text"
+                        id="category"
+                        placeholder="e.g. Food"
+                        required
+                    >
+                </div>
+
+                <div>
+                    <label for="description">Description</label>
+
+                    <input
+                        type="text"
+                        id="description"
+                        placeholder="e.g. Lunch"
+                        required
+                    >
+                </div>
+
+                <div>
+                    <label for="date">Date</label>
+
+                    <input
+                        type="datetime-local"
+                        id="date"
+                        required
+                    >
+                </div>
+
+                <button type="submit">
+                    Add Transaction
+                </button>
+
+            </form>
+
+            <p id="transactionMessage"></p>
+
+        </section>
+
+
+        <!-- Transaction List -->
+        <section class="mt-5">
+
+            <h2>My Transactions</h2>
+
+            <div id="transactionsList">
+                <p>Loading transactions...</p>
+            </div>
+
+        </section>
+
+    </main>
+
+
+    <script src="../js/transactions.js"></script>
+
+</body>
+</html>
