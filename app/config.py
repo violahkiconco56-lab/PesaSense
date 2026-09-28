@@ -39,6 +39,7 @@ class Settings:
     APP_NAME = os.getenv("APP_NAME", "PesaSense AI")
     DATABASE_URL = get_database_url()
     OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+    OPENAI_TIMEOUT_SECONDS = float(os.getenv("OPENAI_TIMEOUT_SECONDS", 20))
     FRONTEND_URL = os.getenv("FRONTEND_URL", "http://127.0.0.1:5173")
     SMTP_HOST = os.getenv("SMTP_HOST")
     SMTP_PORT = int(os.getenv("SMTP_PORT", 587))

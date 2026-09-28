@@ -71,9 +71,10 @@ transactionForm.addEventListener("submit", async function (event) {
 
     event.preventDefault();
 
+    // Income can only be created from the Budgets page, so this form always
+    // records an expense.
     const transaction = {
-        transaction_type:
-            document.getElementById("transactionType").value,
+        transaction_type: "expense",
 
         amount:
             Number(document.getElementById("amount").value),

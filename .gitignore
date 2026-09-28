@@ -16,3 +16,6 @@ __pycache__/
 .vscode/
 .idea/.pytest_cache/
 .pytest_cache/
+
+.venv/
+frontend/react-app/

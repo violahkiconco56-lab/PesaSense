@@ -7,37 +7,67 @@ AI_NOT_CONFIGURED_MESSAGE = (
 )
 
 AI_PACKAGE_MISSING_MESSAGE = (
-    "AI insights are unavailable because the OpenAI package is not installed."
+    "AI insights are unavailable because the OpenAI package is not installed. "
+    "Install it with: pip install openai"
 )
 
+AI_UNAVAILABLE_MESSAGE = (
+    "AI insights are temporarily unavailable. Please try again in a moment."
+)
 
+OPENAI_MODEL = "gpt-4o-mini"
+
+# Raised when the AI service cannot produce a real answer. Callers must
+# surface this to the client as an error response instead of treating the
+# text as a genuine AI answer.
+class AIServiceError(Exception):
+    def __init__(self, message: str, status_code: int = 503):
+        super().__init__(message)
+        self.message = message
+        self.status_code = status_code
+# Build an OpenAI client, or raise AIServiceError explaining what is wrong.
 def get_openai_client():
     if not settings.OPENAI_API_KEY:
-        return None, AI_NOT_CONFIGURED_MESSAGE
+        raise AIServiceError(AI_NOT_CONFIGURED_MESSAGE, status_code=503)
 
     try:
         from openai import OpenAI
+    except ImportError as exc:  # pragma: no cover - depends on environment
+        raise AIServiceError(AI_PACKAGE_MISSING_MESSAGE, status_code=503) from exc
+    return OpenAI(
+        api_key=settings.OPENAI_API_KEY,
+        timeout=settings.OPENAI_TIMEOUT_SECONDS,
+        max_retries=1,
+    )
+
+# Best-effort check that the AI service can be used (key + package).
+def is_ai_available() -> bool:
+    if not settings.OPENAI_API_KEY:
+        return False
+    try:
+        import openai  # noqa: F401
     except ImportError:
-        return None, AI_PACKAGE_MISSING_MESSAGE
-
-    return OpenAI(api_key=settings.OPENAI_API_KEY), None
-
-
+        return False
+    return True
+# Call OpenAI and return the assistant's reply. Raises AIServiceError on any
+# failure so the API layer can respond with a real error status. It never
+# returns an error string as if it were a generated answer.
 def call_openai(prompt: str, max_tokens: int = 300) -> str:
-    client, error_message = get_openai_client()
-    if error_message:
-        return error_message
+    client = get_openai_client()
 
     try:
         response = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model=OPENAI_MODEL,
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=max_tokens
+            max_tokens=max_tokens,
         )
-    except Exception:
-        return "AI insights are temporarily unavailable. Please try again later."
+    except Exception as exc:  # network, auth, rate limit, etc.
+        raise AIServiceError(AI_UNAVAILABLE_MESSAGE, status_code=503) from exc
+    content = response.choices[0].message.content if response.choices else None
+    if not content or not content.strip():
+        raise AIServiceError(AI_UNAVAILABLE_MESSAGE, status_code=503)
 
-    return response.choices[0].message.content
+    return content.strip()
 
 
 def format_ugx(amount: float) -> str:
@@ -85,30 +115,63 @@ def describe_income(transactions: list) -> str:
         "Income sources:\n" + "\n".join(lines)
     )
 
+# Describe budget usage so the model can reason about limits. Each entry is a
+# dict produced by the budget router's status builder.
+def describe_budgets(budgets: list) -> str:
+    if not budgets:
+        return "No budgets set for this period."
 
-def generate_financial_summary(transactions: list, total_income: float, total_expenses: float) -> str:
+    return "\n".join(
+        f"- {budget['category']} ({budget['month']}/{budget['year']}): "
+        f"limit {format_ugx(budget['limit_amount'])}, "
+        f"spent {format_ugx(budget['spent'])}, "
+        f"remaining {format_ugx(budget['remaining'])} "
+        f"({budget['used_percentage']}% used)"
+        for budget in budgets
+    )
+
+# Build the shared data context block sent to the model for both the summary
+# and the free-form question, so both reason over the same real figures.
+def _build_context(
+    transactions: list,
+    total_income: float,
+    total_expenses: float,
+    budgets: list,
+) -> str:
+    transaction_lines = "\n".join(
+        f"- {t.date.strftime('%Y-%m-%d')} | {t.transaction_type} | "
+        f"{t.category} | {format_ugx(t.amount)}"
+        for t in transactions
+    ) or "No transactions recorded yet."
+
+    return (
+        f"Total income: {format_ugx(total_income)}\n"
+        f"Total expenses: {format_ugx(total_expenses)}\n"
+        f"Net balance: {format_ugx(total_income - total_expenses)}\n\n"
+        f"Income context (use this to judge steady vs irregular earnings):\n"
+        f"{describe_income(transactions)}\n\n"
+        f"Budget context:\n{describe_budgets(budgets)}\n\n"
+        f"Transactions (most recent last):\n{transaction_lines}"
+    )
+
+def generate_financial_summary(
+    transactions: list,
+    total_income: float,
+    total_expenses: float,
+    budgets: list | None = None,
+) -> str:
     if not transactions:
         return "No transactions found for this period yet."
 
-    transaction_lines = "\n".join(
-        f"- {t.transaction_type} | {t.category} | {format_ugx(t.amount)} | {t.date.strftime('%Y-%m-%d')}"
-        for t in transactions
+    context = _build_context(
+        transactions, total_income, total_expenses, budgets or []
     )
 
-    income_context = describe_income(transactions)
-
     prompt = f"""
-You are a personal finance assistant for a user in Uganda. Analyze the following transactions and give the user a short, friendly summary of their spending habits.
+You are a personal finance assistant for a user in Uganda. Analyze the following real data and give the user a short, friendly summary of their spending habits.
 All money amounts are in Ugandan shillings. Always report money using UGX, never USD or $.
 
-Total income: {format_ugx(total_income)}
-Total expenses: {format_ugx(total_expenses)}
-
-Income context (use this to judge steady vs irregular earnings):
-{income_context}
-
-Transactions:
-{transaction_lines}
+{context}
 
 Give:
 1. A one-paragraph summary of spending patterns, noting whether income is steady (daily/weekly/monthly) or irregular
@@ -120,26 +183,22 @@ Keep it concise and encouraging, not judgmental.
     return call_openai(prompt, max_tokens=400)
 
 
-def answer_finance_question(question: str, transactions: list, total_income: float, total_expenses: float) -> str:
-    transaction_lines = "\n".join(
-        f"- {t.transaction_type} | {t.category} | {format_ugx(t.amount)} | {t.date.strftime('%Y-%m-%d')}"
-        for t in transactions[-50:]
-    ) or "No transactions recorded yet."
-
-    income_context = describe_income(transactions)
+def answer_finance_question(
+    question: str,
+    transactions: list,
+    total_income: float,
+    total_expenses: float,
+    budgets: list | None = None,
+) -> str:
+    context = _build_context(
+        transactions, total_income, total_expenses, budgets or []
+    )
 
     prompt = f"""
 You are a personal finance assistant for a user in Uganda. Answer the user's finance question using their transaction context when relevant.
 All money amounts are in Ugandan shillings. Always report money using UGX, never USD or $.
 
-Total income: {format_ugx(total_income)}
-Total expenses: {format_ugx(total_expenses)}
-
-Income context (use this to judge steady vs irregular earnings):
-{income_context}
-
-Transactions:
-{transaction_lines}
+{context}
 
 Question:
 {question}
