@@ -16,6 +16,8 @@ def get_database_url() -> str:
     sqlite_prefix = "sqlite:///"
     if not database_url.startswith(sqlite_prefix):
         return database_url
+    if database_url.startswith("postgres://"):
+        database_url = database_url.replace("postgres://", "postgresql://", 1)
 
     sqlite_path = database_url.removeprefix(sqlite_prefix)
     if sqlite_path == ":memory:":
