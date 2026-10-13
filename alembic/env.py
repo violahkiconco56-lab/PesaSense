@@ -8,6 +8,7 @@ from app.database import Base
 from app.models.budget import Budget
 from app.models.transaction import Transaction
 from app.models.user import User
+from app.models.recurring_bill import RecurringBill
 
 config = context.config
 config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)

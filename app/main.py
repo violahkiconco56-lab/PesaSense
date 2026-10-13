@@ -14,6 +14,7 @@ from app.routers import budget
 from app.routers import reports
 from app.routers import analytics
 from app.routers import goal
+from app.routers import recurring_bills
 
 
 
@@ -49,6 +50,7 @@ app.include_router(budget.router)
 app.include_router(reports.router)
 app.include_router(analytics.router)
 app.include_router(goal.router)
+app.include_router(recurring_bills.router)
 
 
 @app.get("/")
