@@ -115,6 +115,9 @@ def verify_email(
             detail="Invalid verification link."
         )
 
+    if user.is_verified:
+        return {"message": "Email confirmed successfully."}
+
     expires_at = user.email_verification_expires_at
     if expires_at is not None:
         if expires_at.tzinfo is None:
@@ -126,8 +129,6 @@ def verify_email(
             )
 
     user.is_verified = True
-    user.email_verification_token = None
-    user.email_verification_expires_at = None
     db.commit()
 
     return {"message": "Email confirmed successfully."}

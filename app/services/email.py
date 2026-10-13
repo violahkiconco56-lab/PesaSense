@@ -1,3 +1,4 @@
+import html
 import logging
 import os
 
@@ -65,10 +66,26 @@ def send_verification_email(email: str, username: str, verification_url: str) ->
         )
         return False
 
+    escaped_username = html.escape(username)
+    escaped_verification_url = html.escape(verification_url, quote=True)
+
     payload = {
         "sender": {"name": "PesaSense-AI", "email": settings.EMAIL_FROM},
         "to": [{"email": email, "name": username}],
         "subject": "Confirm your PesaSense-AI account",
+        "htmlContent": f"""
+            <div style="margin:0;padding:32px 16px;background-color:#eef3ef;font-family:Arial,Helvetica,sans-serif;color:#25352e;">
+              <div style="max-width:560px;margin:0 auto;padding:40px 32px;background-color:#ffffff;border-radius:12px;text-align:center;">
+                <div style="width:56px;height:56px;margin:0 auto 16px;border-radius:50%;background-color:#0f5c3f;color:#ffffff;font-size:30px;font-weight:bold;line-height:56px;">P</div>
+                <h1 style="margin:0;color:#173d2d;font-size:26px;">PesaSense-AI</h1>
+                <p style="margin:8px 0 28px;color:#718078;font-size:14px;">Smarter Money. Brighter Future.</p>
+                <p style="margin:0 0 16px;font-size:17px;">Hi {escaped_username},</p>
+                <p style="margin:0 0 28px;color:#52635a;font-size:15px;line-height:1.6;">We’re glad you’re here. Confirm your email to get started with PesaSense-AI.</p>
+                <a href="{escaped_verification_url}" style="display:inline-block;padding:15px 30px;border-radius:6px;background-color:#0f5c3f;color:#ffffff;text-decoration:none;font-size:16px;font-weight:bold;">Confirm my email</a>
+                <p style="margin:28px 0 0;color:#829087;font-size:12px;line-height:1.6;">This button works for 24 hours. If you didn’t sign up for PesaSense-AI, you can safely ignore this email.</p>
+              </div>
+            </div>
+        """,
         "textContent": (
             f"Hi {username},\n\n"
             "Confirm your PesaSense-AI account by opening this link:\n"
