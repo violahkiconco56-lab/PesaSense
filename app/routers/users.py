@@ -1,7 +1,8 @@
 from datetime import datetime, timedelta, timezone
 import secrets
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, Form, HTTPException, status
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -224,14 +225,35 @@ def change_current_user_password(
 @router.post("/login")
 def login(
     form_data: OAuth2PasswordRequestForm = Depends(),
+    remember_me: bool = Form(False),
     db: Session = Depends(get_db)
 ):
+    login_identifier = form_data.username.strip()
 
-    db_user = (
-        db.query(User)
-        .filter(User.email == form_data.username)
-        .first()
-    )
+    if "@" in login_identifier:
+        db_user = (
+            db.query(User)
+            .filter(func.lower(User.email) == login_identifier.lower())
+            .first()
+        )
+        if db_user is None:
+            db_user = (
+                db.query(User)
+                .filter(User.username == login_identifier)
+                .first()
+            )
+    else:
+        db_user = (
+            db.query(User)
+            .filter(User.username == login_identifier)
+            .first()
+        )
+        if db_user is None:
+            db_user = (
+                db.query(User)
+                .filter(func.lower(User.email) == login_identifier.lower())
+                .first()
+            )
 
     if not db_user or not verify_password(
         form_data.password,
@@ -243,7 +265,8 @@ def login(
         )
 
     token = create_access_token(
-        {"user_id": db_user.id}
+        {"user_id": db_user.id},
+        expires_delta=timedelta(days=30) if remember_me else None,
     )
 
     return {
