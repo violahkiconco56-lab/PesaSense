@@ -6,11 +6,15 @@ from app.database import engine, Base
 from app.models.user import User
 from app.models.transaction import Transaction
 from app.models.budget import Budget
+from app.models.goal import Goal
 
 from app.routers import transactions
 from app.routers import users
 from app.routers import budget
 from app.routers import reports
+from app.routers import analytics
+from app.routers import goal
+
 
 
 app = FastAPI(
@@ -43,6 +47,8 @@ app.include_router(transactions.router)
 app.include_router(users.router)
 app.include_router(budget.router)
 app.include_router(reports.router)
+app.include_router(analytics.router)
+app.include_router(goal.router)
 
 
 @app.get("/")
