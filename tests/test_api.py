@@ -7,6 +7,8 @@ from sqlalchemy.pool import StaticPool
 
 from app.database import Base, get_db
 from app.main import app
+from app.services.ai import AIServiceError
+from app.routers import transactions as transaction_routes
 
 
 SQLALCHEMY_DATABASE_URL = "sqlite://"
@@ -187,7 +189,7 @@ def test_budget_duplicate_prevention_performance_and_alerts():
     assert alerts_response.json()["alerts"][0]["type"] == "approaching_limit"
 
 
-def test_reports_and_ai_fallback():
+def test_reports_and_ai_fallback(monkeypatch):
     headers = register_and_login()
 
     response = client.post(
@@ -211,6 +213,11 @@ def test_reports_and_ai_fallback():
     assert report["total_expenses"] == 50
     assert report["category_breakdown"]["Transport"] == 50
 
+    monkeypatch.setattr(
+        transaction_routes,
+        "answer_finance_question",
+        lambda question, context, history: "Test provider response.",
+    )
     ai_response = client.post(
         "/transactions/insights/question",
         headers=headers,
@@ -218,3 +225,74 @@ def test_reports_and_ai_fallback():
     )
     assert ai_response.status_code == 200
     assert "answer" in ai_response.json()
+
+
+def test_financial_insights_use_aggregates_and_report_ai_unavailable(monkeypatch):
+    headers = register_and_login()
+    now = datetime.now(timezone.utc)
+    descriptions = ["Private merchant detail", "Private salary detail"]
+
+    for amount, transaction_type, category, description in [
+        (250, "expense", "Food", descriptions[0]),
+        (1000, "income", "Salary", descriptions[1]),
+    ]:
+        response = client.post(
+            "/transactions/",
+            headers=headers,
+            json={
+                "amount": amount,
+                "transaction_type": transaction_type,
+                "category": category,
+                "description": description,
+                "date": now.isoformat(),
+            },
+        )
+        assert response.status_code == 200
+
+    captured = {}
+
+    def unavailable_summary(context):
+        captured["summary"] = context
+        raise AIServiceError("AI insights are unavailable.")
+
+    def stub_answer(question, context, history):
+        captured["question"] = question
+        captured["chat"] = context
+        captured["history"] = history
+        return "Test provider response."
+
+    monkeypatch.setattr(
+        transaction_routes, "generate_financial_summary", unavailable_summary
+    )
+    monkeypatch.setattr(transaction_routes, "answer_finance_question", stub_answer)
+
+    summary_response = client.get(
+        "/transactions/insights/summary",
+        headers=headers,
+    )
+    assert summary_response.status_code == 200
+    summary = summary_response.json()
+    assert summary["monthly_summary"]["income"] == 1000
+    assert summary["monthly_summary"]["expenses"] == 250
+    assert summary["forecast"]["is_available"] is True
+    assert summary["summary"] is None
+    assert summary["ai_available"] is False
+    assert descriptions[0] not in str(captured["summary"])
+    assert descriptions[1] not in str(captured["summary"])
+
+    chat_response = client.post(
+        "/transactions/insights/question",
+        headers=headers,
+        json={
+            "question": "How much did I spend?",
+            "history": [{"role": "user", "content": "What is my cash flow?"}],
+        },
+    )
+    assert chat_response.status_code == 200
+    assert chat_response.json()["answer"] == "Test provider response."
+    assert captured["question"] == "How much did I spend?"
+    assert captured["history"] == [
+        {"role": "user", "content": "What is my cash flow?"}
+    ]
+    assert captured["chat"]["current_month"]["expenses"] == 250
+    assert descriptions[0] not in str(captured["chat"])

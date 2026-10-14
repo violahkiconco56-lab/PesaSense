@@ -34,12 +34,13 @@ def get_monthly_summary(db: Session, user_id: int, year: int, month: int) -> dic
 
     for t in transactions:
         kind = (t.transaction_type or "").lower()
+        amount = float(t.amount or 0)
         if kind == "income":
-            income += t.amount
+            income += amount
         elif kind == "expense":
-            expenses += t.amount
+            expenses += amount
             name = (t.category or "Other").title()
-            category_totals[name] = category_totals.get(name, 0) + t.amount
+            category_totals[name] = category_totals.get(name, 0) + amount
 
     net_savings = income - expenses
     savings_rate = round(net_savings / income * 100, 1) if income else None

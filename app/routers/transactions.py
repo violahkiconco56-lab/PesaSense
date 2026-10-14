@@ -7,7 +7,6 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models.transaction import Transaction
 from app.models.user import User
-from app.models.budget import Budget
 from app.schemas.transaction import (
     TransactionCreate,
     TransactionResponse,
@@ -20,7 +19,10 @@ from app.services.ai import (
     answer_finance_question,
     generate_financial_summary,
 )
-from app.routers.budget import build_budget_status
+from app.services.financial_intelligence import (
+    build_financial_intelligence,
+    llm_financial_context,
+)
 
 router = APIRouter(
     prefix="/transactions",
@@ -200,66 +202,16 @@ def get_ai_summary(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    transactions = (
-        db.query(Transaction)
-        .filter(Transaction.user_id == current_user.id)
-        .all()
-    )
-
-    total_income = sum(t.amount for t in transactions if t.transaction_type.lower() == "income")
-    total_expenses = sum(t.amount for t in transactions if t.transaction_type.lower() == "expense")
-    balance = total_income - total_expenses
-
-    category_totals = {}
-    for t in transactions:
-        if t.transaction_type.lower() == "expense":
-            category_totals[t.category] = category_totals.get(t.category, 0) + t.amount
-
-    budgets = db.query(Budget).filter(Budget.user_id == current_user.id).all()
-    budget_statuses = [
-        build_budget_status(db, current_user, budget) for budget in budgets
-    ]
-
+    analysis = build_financial_intelligence(db, current_user.id)
     try:
-        summary = generate_financial_summary(
-            transactions, total_income, total_expenses, budget_statuses
+        analysis["summary"] = generate_financial_summary(
+            llm_financial_context(analysis)
         )
+        analysis["ai_available"] = True
     except AIServiceError as exc:
-        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
-
-    income_transactions = [
-        transaction for transaction in transactions
-        if transaction.transaction_type.lower() == "income"
-    ]
-    monthly_income = sum(
-        transaction.amount * {"daily": 30, "weekly": 4.33, "monthly": 1}.get(
-            (transaction.frequency or "one_time").lower(), 0
-        )
-        for transaction in income_transactions
-    )
-    category_breakdown = {}
-    for transaction in transactions:
-        if transaction.transaction_type.lower() == "expense":
-            category_breakdown[transaction.category] = (
-                category_breakdown.get(transaction.category, 0) + transaction.amount
-            )
-
-    return {
-        "summary": summary,
-        "transaction_count": len(transactions),
-        "total_income": total_income,
-        "total_expenses": total_expenses,
-        "balance": balance,
-        "category_breakdown": category_breakdown,
-        "top_expense_category": max(
-            category_breakdown, key=category_breakdown.get
-        ) if category_breakdown else None,
-        "savings_rate": round(
-            ((total_income - total_expenses) / total_income) * 100, 2
-        ) if total_income else None,
-        "monthly_income": round(monthly_income, 2),
-        "budgets": budget_statuses,
-    }
+        analysis["ai_available"] = False
+        analysis["ai_summary_error"] = exc.message
+    return analysis
 
 
 @router.post("/insights/question")
@@ -268,27 +220,12 @@ def ask_financial_assistant(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    transactions = (
-        db.query(Transaction)
-        .filter(Transaction.user_id == current_user.id)
-        .order_by(Transaction.date.asc(), Transaction.id.asc())
-        .all()
-    )
-
-    total_income = sum(t.amount for t in transactions if t.transaction_type.lower() == "income")
-    total_expenses = sum(t.amount for t in transactions if t.transaction_type.lower() == "expense")
-    budgets = db.query(Budget).filter(Budget.user_id == current_user.id).all()
-    budget_statuses = [
-        build_budget_status(db, current_user, budget) for budget in budgets
-    ]
-
+    analysis = build_financial_intelligence(db, current_user.id)
     try:
         answer = answer_finance_question(
             question_data.question,
-            transactions,
-            total_income,
-            total_expenses,
-            budget_statuses,
+            llm_financial_context(analysis),
+            [message.model_dump() for message in question_data.history],
         )
     except AIServiceError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
