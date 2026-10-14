@@ -1,6 +1,7 @@
 import calendar
 import statistics
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 
 from sqlalchemy.orm import Session
 
@@ -43,7 +44,9 @@ def forecast_month_end(db: Session, user_id: int) -> dict:
 
     current_expenses = _expenses_between(db, user_id, start, end)
     spent = sum(t.amount for t in current_expenses)
-    income = get_monthly_summary(db, user_id, now.year, now.month)["income"]
+    income = Decimal(
+        str(get_monthly_summary(db, user_id, now.year, now.month)["income"])
+    )
     history = []
     history_year, history_month = now.year, now.month
     for _ in range(3):
@@ -53,7 +56,7 @@ def forecast_month_end(db: Session, user_id: int) -> dict:
             history_month -= 1
         monthly = get_monthly_summary(db, user_id, history_year, history_month)
         if monthly["transaction_count"] and monthly["expenses"] > 0:
-            history.append(monthly["expenses"])
+            history.append(Decimal(str(monthly["expenses"])))
 
     if spent > 0:
         projected = _pace_projection(spent, days_elapsed, days_in_month)
@@ -97,7 +100,7 @@ def detect_anomalies(db: Session, user_id: int) -> list[dict]:
     history = _expenses_between(db, user_id, start - timedelta(days=90), start)
     current = _expenses_between(db, user_id, start, end)
 
-    amounts_by_category: dict[str, list[float]] = {}
+    amounts_by_category: dict[str, list[Decimal]] = {}
     for t in history:
         key = (t.category or "other").lower()
         amounts_by_category.setdefault(key, []).append(t.amount)
@@ -112,7 +115,7 @@ def detect_anomalies(db: Session, user_id: int) -> list[dict]:
         spread = statistics.pstdev(amounts)
         threshold = mean + 2 * spread if spread > 0 else mean * 2
 
-        if t.amount > threshold and t.amount > mean * 1.5:
+        if t.amount > threshold and t.amount > mean * Decimal("1.5"):
             alerts.append(
                 {
                     "transaction_id": t.id,
@@ -120,7 +123,7 @@ def detect_anomalies(db: Session, user_id: int) -> list[dict]:
                     "category": (t.category or "Other").title(),
                     "amount": t.amount,
                     "usual_amount": round(mean, 2),
-                    "times_higher": round(t.amount / mean, 1),
+                    "times_higher": float(round(t.amount / mean, 1)),
                     "date": t.date.isoformat() if t.date else None,
                     "baseline_transaction_count": len(amounts),
                     "explanation": (
@@ -162,9 +165,10 @@ def budget_risks(db: Session, user_id: int) -> list[dict]:
         )
         projected = _pace_projection(spent, days_elapsed, days_in_month)
 
-        if spent > budget.limit_amount:
+        limit_amount = Decimal(str(budget.limit_amount))
+        if spent > limit_amount:
             status = "exceeded"
-        elif projected > budget.limit_amount:
+        elif projected > limit_amount:
             status = "at_risk"
         else:
             status = "on_track"
@@ -172,11 +176,13 @@ def budget_risks(db: Session, user_id: int) -> list[dict]:
         results.append(
             {
                 "category": budget.category,
-                "limit": budget.limit_amount,
+                "limit": limit_amount,
                 "spent": round(spent, 2),
                 "projected": round(projected, 2),
-                "percent_used": round(spent / budget.limit_amount * 100, 1)
-                if budget.limit_amount
+                "percent_used": float(
+                    round(spent / limit_amount * Decimal("100"), 1)
+                )
+                if limit_amount
                 else 0,
                 "status": status,
             }
@@ -220,7 +226,7 @@ def savings_target(db: Session, user_id: int) -> dict:
         }
 
     # Suggest 70% of the usual surplus, rounded to the nearest UGX 5,000
-    recommended = round(average * 0.7 / 5000) * 5000
+    recommended = round(average * Decimal("0.7") / Decimal("5000")) * 5000
     return {
         "months_used": len(surpluses),
         "average_surplus": round(average, 2),

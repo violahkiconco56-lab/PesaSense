@@ -1,12 +1,15 @@
 from datetime import datetime, timezone
+from decimal import Decimal
 
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.database import Base, get_db
 from app.main import app
+from app.config import settings
+from app.models.transaction import Transaction
 from app.services.ai import AIServiceError
 from app.routers import transactions as transaction_routes
 
@@ -134,6 +137,111 @@ def test_transaction_filters_and_validation():
     transactions = filter_response.json()
     assert len(transactions) == 1
     assert transactions[0]["category"] == "Food"
+
+
+def test_financial_account_crud_is_user_scoped_and_rejects_credentials():
+    owner_headers = register_and_login("account-owner@example.com", "accountowner")
+    other_headers = register_and_login("account-other@example.com", "accountother")
+
+    unauthenticated = client.get("/financial-accounts/")
+    assert unauthenticated.status_code == 401
+
+    create_response = client.post(
+        "/financial-accounts/",
+        headers=owner_headers,
+        json={
+            "name": "MTN Wallet",
+            "account_type": "mtn_mobile_money",
+            "currency": "ugx",
+        },
+    )
+    assert create_response.status_code == 201
+    account = create_response.json()
+    assert account["name"] == "MTN Wallet"
+    assert account["account_type"] == "mtn_mobile_money"
+    assert account["currency"] == "UGX"
+    assert "user_id" not in account
+    assert "pin" not in account
+    assert "password" not in account
+
+    account_id = account["id"]
+    supported_types = [
+        "mtn_mobile_money",
+        "airtel_money",
+        "bank",
+        "manual",
+    ]
+    for account_type in supported_types[1:]:
+        response = client.post(
+            "/financial-accounts/",
+            headers=owner_headers,
+            json={"name": f"Test {account_type}", "account_type": account_type},
+        )
+        assert response.status_code == 201
+        assert response.json()["account_type"] == account_type
+
+    invalid_type = client.post(
+        "/financial-accounts/",
+        headers=owner_headers,
+        json={"name": "Unknown", "account_type": "mobile"},
+    )
+    assert invalid_type.status_code == 422
+
+    credential_input = client.post(
+        "/financial-accounts/",
+        headers=owner_headers,
+        json={
+            "name": "Airtel Wallet",
+            "account_type": "airtel_money",
+            "pin": "not-a-real-pin",
+        },
+    )
+    assert credential_input.status_code == 422
+    credential_update = client.put(
+        f"/financial-accounts/{account_id}",
+        headers=owner_headers,
+        json={"password": "not-a-real-password"},
+    )
+    assert credential_update.status_code == 422
+
+    list_response = client.get("/financial-accounts/", headers=owner_headers)
+    assert list_response.status_code == 200
+    assert {
+        item["account_type"] for item in list_response.json()
+    } == set(supported_types)
+    assert client.get("/financial-accounts/", headers=other_headers).json() == []
+
+    forbidden_read = client.put(
+        f"/financial-accounts/{account_id}",
+        headers=other_headers,
+        json={"name": "Stolen"},
+    )
+    assert forbidden_read.status_code == 404
+    forbidden_delete = client.delete(
+        f"/financial-accounts/{account_id}",
+        headers=other_headers,
+    )
+    assert forbidden_delete.status_code == 404
+
+    update_response = client.put(
+        f"/financial-accounts/{account_id}",
+        headers=owner_headers,
+        json={"name": "Primary MTN Wallet", "currency": "kes"},
+    )
+    assert update_response.status_code == 200
+    assert update_response.json()["name"] == "Primary MTN Wallet"
+    assert update_response.json()["currency"] == "KES"
+
+    delete_response = client.delete(
+        f"/financial-accounts/{account_id}",
+        headers=owner_headers,
+    )
+    assert delete_response.status_code == 204
+    remaining_accounts = client.get(
+        "/financial-accounts/", headers=owner_headers
+    ).json()
+    assert len(remaining_accounts) == len(supported_types) - 1
+    assert account_id not in {item["id"] for item in remaining_accounts}
 
 
 def test_budget_duplicate_prevention_performance_and_alerts():
@@ -296,3 +404,241 @@ def test_financial_insights_use_aggregates_and_report_ai_unavailable(monkeypatch
     ]
     assert captured["chat"]["current_month"]["expenses"] == 250
     assert descriptions[0] not in str(captured["chat"])
+
+
+def create_import_account(headers, name="Statement Wallet"):
+    response = client.post(
+        "/financial-accounts/",
+        headers=headers,
+        json={"name": name, "account_type": "manual", "currency": "UGX"},
+    )
+    assert response.status_code == 201
+    return response.json()
+
+
+def test_csv_statement_preview_import_duplicates_transfers_and_totals():
+    headers = register_and_login("importer@example.com", "statementimporter")
+    account = create_import_account(headers)
+    csv_content = (
+        "date,description,amount,transaction_type,category\n"
+        "2026-10-01,Market purchase,12.34,expense,food\n"
+        "2026-10-01,Market purchase,12.34,expense,food\n"
+        "2026-10-02,Salary,100.12345678,income,Salary\n"
+        "2026-10-03,Own account transfer,55,transfer,Transfer\n"
+        "not-a-date,Private row detail,-5,expense,Food\n"
+        "2026-10-05,Malformed columns,5,expense,Food,extra\n"
+    ).encode("utf-8")
+
+    preview = client.post(
+        "/transactions/import/preview",
+        headers=headers,
+        data={"account_id": str(account["id"])},
+        files={"file": ("not-a-csv-name.bin", csv_content, "application/octet-stream")},
+    )
+    assert preview.status_code == 200
+    preview_data = preview.json()
+    assert preview_data["account_id"] == account["id"]
+    assert preview_data["total_rows"] == 6
+    assert preview_data["importable_count"] == 3
+    assert preview_data["duplicate_count"] == 0
+    assert preview_data["invalid_count"] == 3
+    assert preview_data["rows"][0]["amount"] == "12.34"
+    assert preview_data["rows"][3]["transaction_type"] == "transfer"
+    assert "Transfers are not supported" in preview_data["rows"][3]["errors"][0]
+
+    with TestingSessionLocal() as db:
+        assert db.query(Transaction).count() == 0
+
+    imported = client.post(
+        "/transactions/import",
+        headers=headers,
+        data={"account_id": str(account["id"])},
+        files={"file": ("statement.csv", csv_content, "text/csv")},
+    )
+    assert imported.status_code == 200
+    assert imported.json() == {
+        "imported_count": 3,
+        "skipped_duplicate_count": 0,
+        "rejected_count": 3,
+    }
+
+    with TestingSessionLocal() as db:
+        imported_transactions = (
+            db.query(Transaction)
+            .filter(Transaction.account_id == account["id"])
+            .order_by(Transaction.id)
+            .all()
+        )
+        assert len(imported_transactions) == 3
+        assert imported_transactions[0].category == "Food"
+        assert [row.transaction_type for row in imported_transactions] == [
+            "expense",
+            "expense",
+            "income",
+        ]
+        assert imported_transactions[0].amount == Decimal("12.34")
+        assert imported_transactions[2].amount == Decimal("100.12345678")
+
+    duplicate_preview = client.post(
+        "/transactions/import/preview",
+        headers=headers,
+        data={"account_id": str(account["id"])},
+        files={"file": ("statement.csv", csv_content, "text/csv")},
+    )
+    assert duplicate_preview.status_code == 200
+    assert duplicate_preview.json()["duplicate_count"] == 3
+    assert duplicate_preview.json()["importable_count"] == 0
+
+    duplicate_import = client.post(
+        "/transactions/import",
+        headers=headers,
+        data={"account_id": str(account["id"])},
+        files={"file": ("statement.csv", csv_content, "text/csv")},
+    )
+    assert duplicate_import.status_code == 200
+    assert duplicate_import.json() == {
+        "imported_count": 0,
+        "skipped_duplicate_count": 3,
+        "rejected_count": 3,
+    }
+
+    summary = client.get("/transactions/dashboard/summary", headers=headers)
+    assert summary.status_code == 200
+    assert summary.json()["total_expenses"] == 24.68
+    assert summary.json()["total_income"] == 100.12345678
+
+    budget = client.post(
+        "/budgets/",
+        headers=headers,
+        json={"category": "Food", "limit_amount": 30, "month": 10, "year": 2026},
+    )
+    assert budget.status_code == 200
+    performance = client.get(
+        "/budgets/performance?month=10&year=2026", headers=headers
+    )
+    assert performance.status_code == 200
+    assert performance.json()["budgets"][0]["spent"] == 24.68
+
+    report = client.get(
+        "/reports/monthly?month=10&year=2026", headers=headers
+    )
+    assert report.status_code == 200
+    assert report.json()["total_expenses"] == 24.68
+
+    deleted_account = client.delete(
+        f"/financial-accounts/{account['id']}", headers=headers
+    )
+    assert deleted_account.status_code == 204
+    with TestingSessionLocal() as db:
+        retained_transactions = db.query(Transaction).all()
+        assert len(retained_transactions) == 3
+        assert all(transaction.account_id is None for transaction in retained_transactions)
+
+
+def test_csv_import_authentication_account_ownership_and_validation(monkeypatch):
+    owner_headers = register_and_login("import-owner@example.com", "importowner")
+    other_headers = register_and_login("import-other@example.com", "importother")
+    account = create_import_account(owner_headers, "Owner Wallet")
+    valid_csv = (
+        "date,description,amount,transaction_type\n"
+        "2026-10-01,Valid row,50,expense\n"
+    ).encode("utf-8")
+
+    unauthenticated = client.post(
+        "/transactions/import/preview",
+        data={"account_id": str(account["id"])},
+        files={"file": ("file.csv", valid_csv, "text/csv")},
+    )
+    assert unauthenticated.status_code == 401
+
+    wrong_owner = client.post(
+        "/transactions/import/preview",
+        headers=other_headers,
+        data={"account_id": str(account["id"])},
+        files={"file": ("file.csv", valid_csv, "text/csv")},
+    )
+    assert wrong_owner.status_code == 404
+
+    invalid_file = client.post(
+        "/transactions/import/preview",
+        headers=owner_headers,
+        data={"account_id": str(account["id"])},
+        files={"file": ("file.csv", b"not a statement", "text/csv")},
+    )
+    assert invalid_file.status_code == 422
+    assert "date" in invalid_file.json()["detail"]
+
+    original_size = settings.CSV_IMPORT_MAX_BYTES
+    monkeypatch.setattr(settings, "CSV_IMPORT_MAX_BYTES", 20)
+    oversized = client.post(
+        "/transactions/import/preview",
+        headers=owner_headers,
+        data={"account_id": str(account["id"])},
+        files={"file": ("file.csv", valid_csv, "text/csv")},
+    )
+    assert oversized.status_code == 413
+    monkeypatch.setattr(settings, "CSV_IMPORT_MAX_BYTES", original_size)
+
+    monkeypatch.setattr(settings, "CSV_IMPORT_MAX_ROWS", 1)
+    too_many_rows = client.post(
+        "/transactions/import/preview",
+        headers=owner_headers,
+        data={"account_id": str(account["id"])},
+        files={
+            "file": (
+                "file.csv",
+                (
+                    "date,description,amount,transaction_type\n"
+                    "2026-10-01,First,1,expense\n"
+                    "2026-10-02,Second,2,income\n"
+                ).encode("utf-8"),
+                "text/csv",
+            )
+        },
+    )
+    assert too_many_rows.status_code == 422
+    assert "maximum row count" in too_many_rows.json()["detail"]
+
+    monkeypatch.setattr(settings, "CSV_IMPORT_MAX_ROWS", 1000)
+    invalid_encoding = client.post(
+        "/transactions/import/preview",
+        headers=owner_headers,
+        data={"account_id": str(account["id"])},
+        files={"file": ("file.csv", b"\xff\xfe\x00\x00", "text/csv")},
+    )
+    assert invalid_encoding.status_code == 422
+    assert "UTF-8" in invalid_encoding.json()["detail"]
+
+
+def test_csv_import_database_failure_rolls_back_all_rows():
+    headers = register_and_login("import-rollback@example.com", "importrollback")
+    account = create_import_account(headers)
+    csv_content = (
+        "date,description,amount,transaction_type\n"
+        "2026-10-01,First row,10,expense\n"
+        "2026-10-02,Second row,20,income\n"
+    ).encode("utf-8")
+
+    def fail_import(mapper, connection, target):
+        if target.description == "Second row":
+            raise RuntimeError("Simulated persistence failure")
+
+    event.listen(Transaction, "before_insert", fail_import)
+    try:
+        safe_client = TestClient(app, raise_server_exceptions=False)
+        response = safe_client.post(
+            "/transactions/import",
+            headers=headers,
+            data={"account_id": str(account["id"])},
+            files={"file": ("statement.csv", csv_content, "text/csv")},
+        )
+    finally:
+        event.remove(Transaction, "before_insert", fail_import)
+    assert response.status_code == 500
+    with TestingSessionLocal() as db:
+        assert (
+            db.query(Transaction)
+            .filter(Transaction.account_id == account["id"])
+            .count()
+            == 0
+        )

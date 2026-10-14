@@ -3,10 +3,12 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
 from app.database import engine, Base
+from app.middleware import CsvUploadLimitMiddleware
 from app.models.user import User
 from app.models.transaction import Transaction
 from app.models.budget import Budget
 from app.models.goal import Goal
+from app.models.financial_account import FinancialAccount
 
 from app.routers import transactions
 from app.routers import users
@@ -16,6 +18,7 @@ from app.routers import analytics
 from app.routers import goal
 from app.routers import recurring_bills
 from app.routers import predictions
+from app.routers import financial_accounts
 
 
 
@@ -24,6 +27,10 @@ app = FastAPI(
     version="1.0.0"
 )
 
+app.add_middleware(
+    CsvUploadLimitMiddleware,
+    max_file_bytes=settings.CSV_IMPORT_MAX_BYTES,
+)
 app.add_middleware(
     CORSMiddleware,
     # A literal "*" cannot be combined with allow_credentials=True: browsers
@@ -53,6 +60,7 @@ app.include_router(analytics.router)
 app.include_router(goal.router)
 app.include_router(recurring_bills.router)
 app.include_router(predictions.router)   
+app.include_router(financial_accounts.router)
 
 @app.get("/")
 def home():

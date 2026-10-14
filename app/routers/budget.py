@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
@@ -37,25 +38,28 @@ def get_budget_spent(db: Session, current_user: User, budget: Budget):
             Transaction.date >= start_date,
             Transaction.date < end_date,
         )
-        .scalar() or 0
+        .scalar() or Decimal("0")
     )
 
 
 def build_budget_status(db: Session, current_user: User, budget: Budget):
     spent = get_budget_spent(db, current_user, budget)
-    remaining = budget.limit_amount - spent
-    used_percentage = round((spent / budget.limit_amount) * 100, 2)
+    limit_amount = Decimal(str(budget.limit_amount))
+    remaining = limit_amount - spent
+    used_percentage = float(
+        (spent / limit_amount * Decimal("100")).quantize(Decimal("0.01"))
+    )
     return {
         "budget_id": budget.id,
         "category": budget.category,
         "month": budget.month,
         "year": budget.year,
-        "limit_amount": budget.limit_amount,
+        "limit_amount": limit_amount,
         "spent": spent,
         "remaining": remaining,
         "used_percentage": used_percentage,
-        "approaching_limit": used_percentage >= 80 and spent <= budget.limit_amount,
-        "over_budget": spent > budget.limit_amount
+        "approaching_limit": used_percentage >= 80 and spent <= limit_amount,
+        "over_budget": spent > limit_amount
     }
 
 

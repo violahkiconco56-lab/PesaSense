@@ -56,6 +56,8 @@ class Settings:
         os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", 30)
     )
     AUTO_CREATE_TABLES = get_bool_env("AUTO_CREATE_TABLES", True)
+    CSV_IMPORT_MAX_BYTES = int(os.getenv("CSV_IMPORT_MAX_BYTES", 5 * 1024 * 1024))
+    CSV_IMPORT_MAX_ROWS = int(os.getenv("CSV_IMPORT_MAX_ROWS", 1000))
 
 
 settings = Settings()

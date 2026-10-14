@@ -1,5 +1,6 @@
 import calendar
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -254,7 +255,7 @@ def build_financial_intelligence(db: Session, user_id: int) -> dict:
         .all()
     )
     all_time_totals = {
-        kind: {"amount": float(amount or 0), "count": int(count)}
+        kind: {"amount": amount or Decimal("0"), "count": int(count)}
         for kind, amount, count in aggregate_rows
     }
     transaction_count = sum(row["count"] for row in all_time_totals.values())
@@ -274,7 +275,7 @@ def build_financial_intelligence(db: Session, user_id: int) -> dict:
         .all()
     )
     category_breakdown = {
-        (category or "Other"): float(amount or 0)
+        (category or "Other"): amount or Decimal("0")
         for category, amount in all_time_categories
     }
     top_expense_category = (
@@ -291,11 +292,18 @@ def build_financial_intelligence(db: Session, user_id: int) -> dict:
         )
         .all()
     )
-    monthly_multipliers = {"daily": 30, "weekly": 4.33, "monthly": 1}
+    monthly_multipliers = {
+        "daily": Decimal("30"),
+        "weekly": Decimal("4.33"),
+        "monthly": Decimal("1"),
+    }
     monthly_income = sum(
-        float(amount or 0)
-        * monthly_multipliers.get((frequency or "one_time").lower(), 0)
-        for amount, frequency in income_rows
+        (
+            (amount or Decimal("0"))
+            * monthly_multipliers.get((frequency or "one_time").lower(), 0)
+            for amount, frequency in income_rows
+        ),
+        Decimal("0"),
     )
 
     forecast = forecast_month_end(db, user_id)

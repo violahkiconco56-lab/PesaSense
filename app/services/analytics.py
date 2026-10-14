@@ -1,4 +1,5 @@
 from datetime import datetime
+from decimal import Decimal
 
 from sqlalchemy.orm import Session
 
@@ -28,13 +29,13 @@ def get_monthly_summary(db: Session, user_id: int, year: int, month: int) -> dic
         .all()
     )
 
-    income = 0.0
-    expenses = 0.0
+    income = Decimal("0")
+    expenses = Decimal("0")
     category_totals = {}
 
     for t in transactions:
         kind = (t.transaction_type or "").lower()
-        amount = float(t.amount or 0)
+        amount = t.amount or Decimal("0")
         if kind == "income":
             income += amount
         elif kind == "expense":

@@ -1,16 +1,24 @@
 from datetime import datetime
+from decimal import Decimal
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.database import get_db
+from app.models.financial_account import FinancialAccount
 from app.models.transaction import Transaction
 from app.models.user import User
 from app.schemas.transaction import (
     TransactionCreate,
     TransactionResponse,
     TransactionUpdate,
+)
+from app.schemas.transaction_import import (
+    TransactionImportPreview,
+    TransactionImportResult,
 )
 from app.schemas.ai import FinanceQuestion
 from app.services.auth import get_current_user
@@ -23,11 +31,106 @@ from app.services.financial_intelligence import (
     build_financial_intelligence,
     llm_financial_context,
 )
+from app.services.csv_statement_import import (
+    CsvStatementError,
+    ParsedStatementRow,
+    parse_csv_statement,
+)
 
 router = APIRouter(
     prefix="/transactions",
     tags=["Transactions"]
 )
+
+
+def _owned_account(db: Session, account_id: int, user_id: int) -> FinancialAccount:
+    account = (
+        db.query(FinancialAccount)
+        .filter(
+            FinancialAccount.id == account_id,
+            FinancialAccount.user_id == user_id,
+        )
+        .first()
+    )
+    if account is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Financial account not found",
+        )
+    return account
+
+
+async def _read_csv(file: UploadFile) -> bytes:
+    content = await file.read(settings.CSV_IMPORT_MAX_BYTES + 1)
+    if len(content) > settings.CSV_IMPORT_MAX_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+            detail="The CSV file exceeds the upload size limit.",
+        )
+    return content
+
+
+def _row_status(row: ParsedStatementRow, existing_fingerprints: set[str]) -> str:
+    if row.errors:
+        return "invalid"
+    if row.fingerprint in existing_fingerprints:
+        return "duplicate"
+    return "valid"
+
+
+def _preview_response(
+    account: FinancialAccount,
+    rows: list[ParsedStatementRow],
+    existing_fingerprints: set[str],
+) -> TransactionImportPreview:
+    response_rows = []
+    importable_count = duplicate_count = invalid_count = 0
+    for row in rows:
+        row_status = _row_status(row, existing_fingerprints)
+        if row_status == "valid":
+            importable_count += 1
+        elif row_status == "duplicate":
+            duplicate_count += 1
+        else:
+            invalid_count += 1
+        response_rows.append(
+            {
+                "line_number": row.line_number,
+                "status": row_status,
+                "errors": row.errors,
+                "date": row.date,
+                "description": row.description,
+                "transaction_type": row.transaction_type,
+                "amount": format(row.amount, "f") if row.amount is not None else None,
+                "category": row.category,
+            }
+        )
+    return TransactionImportPreview(
+        account_id=account.id,
+        account_name=account.name,
+        currency=account.currency,
+        total_rows=len(rows),
+        importable_count=importable_count,
+        duplicate_count=duplicate_count,
+        invalid_count=invalid_count,
+        rows=response_rows,
+    )
+
+
+def _existing_fingerprints(
+    db: Session, account_id: int, fingerprints: set[str]
+) -> set[str]:
+    if not fingerprints:
+        return set()
+    return set(
+        fingerprint
+        for (fingerprint,) in db.query(Transaction.import_fingerprint)
+        .filter(
+            Transaction.account_id == account_id,
+            Transaction.import_fingerprint.in_(fingerprints),
+        )
+        .all()
+    )
 
 
 @router.post("/", response_model=TransactionResponse)
@@ -37,6 +140,9 @@ def create_transaction(
     current_user: User = Depends(get_current_user)
 ):
     transaction_data = transaction.model_dump(exclude_none=True)
+    account_id = transaction_data.get("account_id")
+    if account_id is not None:
+        _owned_account(db, account_id, current_user.id)
     new_transaction = Transaction(
         **transaction_data,
         user_id=current_user.id
@@ -47,6 +153,92 @@ def create_transaction(
     db.refresh(new_transaction)
 
     return new_transaction
+
+
+@router.post("/import/preview", response_model=TransactionImportPreview)
+async def preview_transaction_import(
+    account_id: int = Form(...),
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    account = _owned_account(db, account_id, current_user.id)
+    try:
+        rows = parse_csv_statement(await _read_csv(file))
+    except CsvStatementError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
+    fingerprints = {row.fingerprint for row in rows if row.fingerprint}
+    existing = _existing_fingerprints(db, account.id, fingerprints)
+    return _preview_response(account, rows, existing)
+
+
+@router.post("/import", response_model=TransactionImportResult)
+async def import_transactions(
+    account_id: int = Form(...),
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    account = _owned_account(db, account_id, current_user.id)
+    try:
+        rows = parse_csv_statement(await _read_csv(file))
+    except CsvStatementError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
+
+    fingerprints = {row.fingerprint for row in rows if row.fingerprint}
+    existing = _existing_fingerprints(db, account.id, fingerprints)
+    imported_count = skipped_duplicate_count = rejected_count = 0
+    try:
+        for row in rows:
+            if row.errors:
+                rejected_count += 1
+                continue
+            if row.fingerprint in existing:
+                skipped_duplicate_count += 1
+                continue
+
+            transaction = Transaction(
+                amount=row.amount,
+                transaction_type=row.transaction_type,
+                category=row.category,
+                description=row.description,
+                frequency="one_time" if row.transaction_type == "income" else None,
+                date=row.date,
+                user_id=current_user.id,
+                account_id=account.id,
+                import_fingerprint=row.fingerprint,
+            )
+            db.add(transaction)
+            existing.add(row.fingerprint)
+            imported_count += 1
+        db.flush()
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        error_text = str(exc.orig).lower()
+        is_import_duplicate = (
+            "uq_transactions_account_import_fingerprint" in error_text
+            or (
+                "unique constraint failed" in error_text
+                and "transactions.account_id" in error_text
+                and "transactions.import_fingerprint" in error_text
+            )
+        )
+        if is_import_duplicate:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="The statement changed during import. Preview it again before confirming.",
+            ) from exc
+        raise
+    except Exception:
+        db.rollback()
+        raise
+
+    return TransactionImportResult(
+        imported_count=imported_count,
+        skipped_duplicate_count=skipped_duplicate_count,
+        rejected_count=rejected_count,
+    )
 
 
 @router.get("/", response_model=list[TransactionResponse])
@@ -163,13 +355,13 @@ def get_income_summary(
     )
 
     monthly_multiplier = {
-        "daily": 30,
-        "weekly": 4.33,
-        "monthly": 1,
+        "daily": Decimal("30"),
+        "weekly": Decimal("4.33"),
+        "monthly": Decimal("1"),
     }
 
-    total_income = 0.0
-    monthly_income = 0.0
+    total_income = Decimal("0")
+    monthly_income = Decimal("0")
     frequency_breakdown = {}
     source_totals = {}
 
@@ -280,6 +472,9 @@ def update_transaction(
         )
 
     update_fields = updated_data.model_dump(exclude_unset=True)
+    account_id = update_fields.get("account_id")
+    if account_id is not None:
+        _owned_account(db, account_id, current_user.id)
     for field, value in update_fields.items():
         setattr(transaction, field, value)
 

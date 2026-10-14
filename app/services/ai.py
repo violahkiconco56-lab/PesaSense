@@ -1,5 +1,6 @@
 import json
 from collections.abc import Sequence
+from decimal import Decimal
 
 from app.config import settings
 
@@ -110,7 +111,14 @@ def _context_message(financial_context: dict) -> dict[str, str]:
         "role": "system",
         "content": (
             "Verified, authenticated-user financial snapshot (JSON; UGX):\n"
-            + json.dumps(financial_context, ensure_ascii=True, separators=(",", ":"))
+            + json.dumps(
+                financial_context,
+                ensure_ascii=True,
+                separators=(",", ":"),
+                default=lambda value: float(value)
+                if isinstance(value, Decimal)
+                else str(value),
+            )
         ),
     }
 

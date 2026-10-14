@@ -1,4 +1,5 @@
 from datetime import datetime
+from decimal import Decimal
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -35,12 +36,13 @@ def normalize_frequency(value):
 
 
 class TransactionCreate(BaseModel):
-    amount: float = Field(gt=0)
+    amount: Decimal = Field(gt=0, max_digits=24, decimal_places=8)
     transaction_type: TransactionType
     category: str = Field(min_length=2, max_length=50)
     description: str | None = Field(default=None, max_length=255)
     frequency: IncomeFrequency | None = None
     date: datetime | None = None
+    account_id: int | None = None
 
     @field_validator("transaction_type", mode="before")
     @classmethod
@@ -74,22 +76,26 @@ class TransactionResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
-    amount: float
+    amount: Decimal
     transaction_type: str
     category: str
     description: str | None
     frequency: str | None = None
     date: datetime
     user_id: int
+    account_id: int | None = None
 
 
 class TransactionUpdate(BaseModel):
-    amount: float | None = Field(default=None, gt=0)
+    amount: Decimal | None = Field(
+        default=None, gt=0, max_digits=24, decimal_places=8
+    )
     transaction_type: TransactionType | None = None
     category: str | None = Field(default=None, min_length=2, max_length=50)
     description: str | None = Field(default=None, max_length=255)
     frequency: IncomeFrequency | None = None
     date: datetime | None = None
+    account_id: int | None = None
 
     @field_validator("transaction_type", mode="before")
     @classmethod
