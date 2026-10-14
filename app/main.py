@@ -2,13 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
-from app.database import engine, Base
 from app.middleware import CsvUploadLimitMiddleware
-from app.models.user import User
-from app.models.transaction import Transaction
-from app.models.budget import Budget
-from app.models.goal import Goal
-from app.models.financial_account import FinancialAccount
 
 from app.routers import transactions
 from app.routers import users
@@ -50,8 +44,6 @@ app.add_middleware(
 )
 
 
-if settings.AUTO_CREATE_TABLES:
-    Base.metadata.create_all(bind=engine)
 app.include_router(transactions.router)
 app.include_router(users.router)
 app.include_router(budget.router)

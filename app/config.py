@@ -30,13 +30,6 @@ def get_database_url() -> str:
     return f"sqlite:///{(BASE_DIR / path).resolve().as_posix()}"
 
 
-def get_bool_env(name: str, default: bool) -> bool:
-    value = os.getenv(name)
-    if value is None:
-        return default
-    return value.strip().lower() in {"1", "true", "yes", "on"}
-
-
 class Settings:
     APP_NAME = os.getenv("APP_NAME", "PesaSense AI")
     DATABASE_URL = get_database_url()
@@ -55,7 +48,6 @@ class Settings:
     ACCESS_TOKEN_EXPIRE_MINUTES = int(
         os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", 30)
     )
-    AUTO_CREATE_TABLES = get_bool_env("AUTO_CREATE_TABLES", False)
     CSV_IMPORT_MAX_BYTES = int(os.getenv("CSV_IMPORT_MAX_BYTES", 5 * 1024 * 1024))
     CSV_IMPORT_MAX_ROWS = int(os.getenv("CSV_IMPORT_MAX_ROWS", 1000))
 
