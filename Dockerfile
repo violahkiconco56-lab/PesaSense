@@ -10,8 +10,4 @@ COPY . .
 
 EXPOSE 8001
 
-CMD [
-  "sh",
-  "-c",
-  "echo 'Applying database migrations...' >&2; if ! alembic upgrade head; then echo 'Database migration failed; refusing to start PesaSense-AI.' >&2; exit 1; fi; exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8001}"
-]
+CMD ["sh", "-c", "echo 'Applying database migrations...' >&2; if ! alembic upgrade head; then echo 'Database migration failed; refusing to start PesaSense-AI.' >&2; exit 1; fi; exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8001}"]
