@@ -26,6 +26,13 @@ class User(Base):
     is_verified = Column(Boolean, default=False, nullable=False)
     email_verification_token = Column(String, nullable=True, index=True)
     email_verification_expires_at = Column(DateTime(timezone=True), nullable=True)
+    subscription_plan = Column(
+        String(20), nullable=False, default="free", server_default="free"
+    )
+    subscription_status = Column(
+        String(20), nullable=False, default="active", server_default="active"
+    )
+    current_period_end = Column(DateTime(timezone=True), nullable=True)
 
 
     transactions = relationship(

@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 
@@ -31,6 +33,9 @@ class UserResponse(BaseModel):
     email: EmailStr
     profile_picture_url: str | None = None
     is_verified: bool
+    subscription_plan: str = "free"
+    subscription_status: str = "active"
+    current_period_end: datetime | None = None
 
 
 class UserCreateResponse(UserResponse):

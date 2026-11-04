@@ -19,3 +19,7 @@ __pycache__/
 
 .venv/
 frontend/react-app/
+
+# Local database credentials and backups
+database_url.txt
+backups/

@@ -10,8 +10,12 @@ from app.database import Base, get_db
 from app.main import app
 from app.config import settings
 from app.models.transaction import Transaction
+from app.models.user import User
 from app.services.ai import AIServiceError
 from app.routers import transactions as transaction_routes
+from app.routers import payments as payment_routes
+from app.services import relworx
+from app.services.relworx import RelworxError
 
 
 SQLALCHEMY_DATABASE_URL = "sqlite://"
@@ -88,6 +92,211 @@ def test_user_profile_update_and_password_change():
         },
     )
     assert password_response.status_code == 204
+
+
+def test_premium_payment_only_activates_after_confirmed_status_and_is_idempotent(
+    monkeypatch,
+):
+    headers = register_and_login("premium@example.com", "premiumuser")
+    monkeypatch.setattr(settings, "RELWORX_API_KEY", "mock-api-key")
+    monkeypatch.setattr(settings, "RELWORX_ACCOUNT_NO", "mock-account")
+
+    def request_payment(**request):
+        assert request["amount"] == settings.PREMIUM_PRICE_UGX
+        assert request["msisdn"] == "+256701234567"
+        return {"success": True, "internal_reference": "provider-reference-1"}
+
+    provider_status = {
+        "success": True,
+        "status": "pending",
+        "request_status": "pending",
+        "customer_reference": None,
+        "internal_reference": "provider-reference-1",
+        "msisdn": "+256701234567",
+        "amount": settings.PREMIUM_PRICE_UGX,
+        "currency": "UGX",
+    }
+
+    monkeypatch.setattr(payment_routes, "request_payment", request_payment)
+    monkeypatch.setattr(
+        payment_routes,
+        "check_request_status",
+        lambda internal_reference: dict(provider_status),
+    )
+
+    unauthenticated = client.post(
+        "/payments/premium",
+        json={"msisdn": "+256701234567"},
+    )
+    assert unauthenticated.status_code == 401
+
+    invalid_number = client.post(
+        "/payments/premium",
+        headers=headers,
+        json={"msisdn": "0701234567"},
+    )
+    assert invalid_number.status_code == 422
+    price = client.get("/payments/premium/price", headers=headers)
+    assert price.status_code == 200
+    assert price.json() == {"amount": settings.PREMIUM_PRICE_UGX, "currency": "UGX"}
+
+    response = client.post(
+        "/payments/premium",
+        headers=headers,
+        json={"msisdn": "+256701234567"},
+    )
+    assert response.status_code == 201
+    payment = response.json()
+    assert payment["status"] == "pending"
+    assert payment["amount"] == settings.PREMIUM_PRICE_UGX
+
+    # A webhook claiming success is not authoritative when Relworx says pending.
+    provider_status["customer_reference"] = payment["reference"]
+    webhook_response = client.post(
+        "/payments/webhook",
+        json={
+            "status": "success",
+            "customer_reference": payment["reference"],
+            "internal_reference": "provider-reference-1",
+        },
+    )
+    assert webhook_response.status_code == 200
+    profile = client.get("/users/me", headers=headers).json()
+    assert profile["subscription_plan"] == "free"
+
+    provider_status["status"] = "success"
+    provider_status["request_status"] = "success"
+    confirmed = client.get(
+        f"/payments/{payment['reference']}",
+        headers=headers,
+    )
+    assert confirmed.status_code == 200
+    assert confirmed.json()["status"] == "success"
+    assert confirmed.json()["current_period_end"]
+
+    end_date = confirmed.json()["current_period_end"]
+    profile = client.get("/users/me", headers=headers).json()
+    assert profile["subscription_plan"] == "premium"
+    assert profile["subscription_status"] == "active"
+    assert profile["current_period_end"] == end_date
+
+    # Repeated provider notifications must not grant an additional 30 days.
+    repeated_webhook = client.post(
+        "/payments/webhook",
+        json={
+            "status": "failed",
+            "customer_reference": payment["reference"],
+            "internal_reference": "provider-reference-1",
+        },
+    )
+    assert repeated_webhook.status_code == 200
+    repeated_status = client.get(
+        f"/payments/{payment['reference']}",
+        headers=headers,
+    )
+    assert repeated_status.json()["current_period_end"] == end_date
+
+
+def test_premium_subscription_expires_after_its_period():
+    headers = register_and_login("expired@example.com", "expireduser")
+    db = TestingSessionLocal()
+    try:
+        user = db.query(User).filter(User.email == "expired@example.com").one()
+        user.subscription_plan = "premium"
+        user.subscription_status = "active"
+        user.current_period_end = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        db.commit()
+    finally:
+        db.close()
+
+    response = client.get("/users/me", headers=headers)
+    assert response.status_code == 200
+    assert response.json()["subscription_plan"] == "free"
+    assert response.json()["subscription_status"] == "expired"
+
+
+def test_relworx_rate_limit_is_user_friendly_and_does_not_call_live_service(
+    monkeypatch,
+):
+    headers = register_and_login("rate-limit@example.com", "ratelimituser")
+    monkeypatch.setattr(settings, "RELWORX_API_KEY", "mock-api-key")
+    monkeypatch.setattr(settings, "RELWORX_ACCOUNT_NO", "mock-account")
+
+    def limited_request(**request):
+        raise RelworxError("rate limited", status_code=429)
+
+    monkeypatch.setattr(payment_routes, "request_payment", limited_request)
+    response = client.post(
+        "/payments/premium",
+        headers=headers,
+        json={"msisdn": "+256701234567"},
+    )
+    assert response.status_code == 429
+    assert "Wait 10 minutes" in response.json()["detail"]
+
+
+def test_relworx_request_and_status_use_documented_contract(monkeypatch):
+    monkeypatch.setattr(settings, "RELWORX_API_KEY", "mock-api-key")
+    monkeypatch.setattr(settings, "RELWORX_ACCOUNT_NO", "mock-account")
+    captured = {}
+
+    class FakeResponse:
+        status_code = 200
+        is_error = False
+
+        def __init__(self, data):
+            self.data = data
+
+        def json(self):
+            return self.data
+
+    def fake_post(url, **kwargs):
+        captured["post"] = (url, kwargs)
+        return FakeResponse(
+            {"success": True, "internal_reference": "provider-reference-2"}
+        )
+
+    def fake_get(url, **kwargs):
+        captured["get"] = (url, kwargs)
+        return FakeResponse({"success": True, "status": "pending"})
+
+    monkeypatch.setattr(relworx.httpx, "post", fake_post)
+    monkeypatch.setattr(relworx.httpx, "get", fake_get)
+
+    relworx.request_payment(
+        reference="1234567890abcdef1234567890abcdef",
+        msisdn="+256701234567",
+        amount=5000,
+        description="PesaSense-AI Premium subscription",
+    )
+    relworx.check_request_status("provider-reference-2")
+
+    post_url, post_options = captured["post"]
+    assert post_url == (
+        "https://payments.relworx.com/api/mobile-money/request-payment"
+    )
+    assert post_options["headers"] == {
+        "Content-Type": "application/json",
+        "Accept": "application/vnd.relworx.v2",
+        "Authorization": "Bearer mock-api-key",
+    }
+    assert post_options["json"] == {
+        "account_no": "mock-account",
+        "reference": "1234567890abcdef1234567890abcdef",
+        "msisdn": "+256701234567",
+        "currency": "UGX",
+        "amount": 5000,
+        "description": "PesaSense-AI Premium subscription",
+    }
+
+    get_url, get_options = captured["get"]
+    assert get_url == (
+        "https://payments.relworx.com/api/mobile-money/check-request-status"
+    )
+    assert get_options["params"] == {
+        "internal_reference": "provider-reference-2",
+        "account_no": "mock-account",
+    }
 
 
 def test_transaction_filters_and_validation():

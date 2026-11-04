@@ -13,6 +13,7 @@ from app.routers import goal
 from app.routers import recurring_bills
 from app.routers import predictions
 from app.routers import financial_accounts
+from app.routers import payments
 
 
 
@@ -53,6 +54,7 @@ app.include_router(goal.router)
 app.include_router(recurring_bills.router)
 app.include_router(predictions.router)   
 app.include_router(financial_accounts.router)
+app.include_router(payments.router)
 
 @app.get("/")
 def home():

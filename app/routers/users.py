@@ -26,6 +26,19 @@ router = APIRouter(
 )
 
 
+def _expire_premium_if_due(db: Session, user: User) -> User:
+    period_end = user.current_period_end
+    if user.subscription_plan == "premium" and period_end is not None:
+        if period_end.tzinfo is None:
+            period_end = period_end.replace(tzinfo=timezone.utc)
+        if period_end <= datetime.now(timezone.utc):
+            user.subscription_plan = "free"
+            user.subscription_status = "expired"
+            db.commit()
+            db.refresh(user)
+    return user
+
+
 @router.post(
     "/",
     response_model=UserCreateResponse,
@@ -147,16 +160,18 @@ def email_status():
 
 @router.get("/", response_model=UserResponse)
 def get_current_user_profile_from_root(
-    current_user: User = Depends(get_current_user)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
-    return current_user
+    return _expire_premium_if_due(db, current_user)
 
 
 @router.get("/me", response_model=UserResponse)
 def get_current_user_profile(
-    current_user: User = Depends(get_current_user)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
-    return current_user
+    return _expire_premium_if_due(db, current_user)
 
 
 @router.put("/me", response_model=UserResponse)
